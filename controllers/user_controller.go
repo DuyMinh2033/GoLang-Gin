@@ -2,15 +2,40 @@ package controllers
 
 import (
 	models "ProjectGo/model"
+	"ProjectGo/utils"
 	"context"
-	"github.com/gin-gonic/gin"
-	"go.mongodb.org/mongo-driver/bson/primitive"
-	"go.mongodb.org/mongo-driver/mongo"
+	"fmt"
 	"net/http"
 	"time"
+
+	"github.com/gin-gonic/gin"
+	"go.mongodb.org/mongo-driver/mongo"
 )
 
-var UserCollection *mongo.Collection
+var (
+	UserCollection *mongo.Collection = utils.GetCollection("users")
+	jobQueue                         = make(chan models.User, 100)
+)
+
+func init() {
+	fmt.Println("Initializing worker pool...")
+	for i := 0; i < 5; i++ {
+		go worker()
+	}
+}
+
+func worker() {
+	for user := range jobQueue {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		_, err := UserCollection.InsertOne(ctx, user)
+		if err != nil {
+			fmt.Printf("Failed to insert user: %v\n", err)
+		} else {
+			fmt.Println("User inserted successfully:", user)
+		}
+		cancel()
+	}
+}
 
 func CreateUserHandler(c *gin.Context) {
 	var user models.User
@@ -18,28 +43,9 @@ func CreateUserHandler(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid JSON payload"})
 		return
 	}
-	user.ID = primitive.NewObjectID()
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	_, err := UserCollection.InsertOne(ctx, user)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to insert user into MongoDB"})
-		return
-	}
+	jobQueue <- user
 	c.JSON(http.StatusOK, gin.H{
-		"message": "User created successfully",
+		"message": "User creation request received",
 		"user":    user,
-	})
-}
-
-func TestApiWorking(c *gin.Context) {
-	c.JSON(http.StatusOK, gin.H{
-		"message": "API is working",
-	})
-}
-
-func UpdateUserHandler(c *gin.Context) {
-	c.JSON(http.StatusOK, gin.H{
-		"message": "Update endpoint",
 	})
 }
